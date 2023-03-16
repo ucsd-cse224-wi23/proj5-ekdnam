@@ -5,11 +5,11 @@ install:
 
 .PHONY: run-blockstore
 run-blockstore:
-	go run cmd/SurfstoreServerExec/main.go -s block -p 8081 -l
+	go run cmd/SurfstoreServerExec/main.go -d -s block -p 8081 -l
 
 .PHONY: run-raft
 run-raft:
-	go run cmd/SurfstoreRaftServerExec/main.go -f example_config.txt -i $(IDX)
+	go run cmd/SurfstoreRaftServerExec/main.go -d -f example_config.txt -i $(IDX)
 
 .PHONY: test
 test:

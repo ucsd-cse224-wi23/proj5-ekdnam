@@ -1,9 +1,9 @@
 package SurfTest
 
 import (
-	"cse224/proj5/pkg/surfstore"
-	emptypb "google.golang.org/protobuf/types/known/emptypb"
 	"testing"
+
+	emptypb "google.golang.org/protobuf/types/known/emptypb"
 )
 
 func TestRaftSetLeader(t *testing.T) {
@@ -23,12 +23,13 @@ func TestRaftSetLeader(t *testing.T) {
 
 	for idx, server := range test.Clients {
 		// all should have the leaders term
-		state, _ := server.GetInternalState(test.Context, &emptypb.Empty{})
+		state, err := server.GetInternalState(test.Context, &emptypb.Empty{})
 		if state == nil {
+			t.Log(err)
 			t.Fatalf("Could not get state")
 		}
 		if state.Term != int64(1) {
-			t.Fatalf("Server %d should be in term %d", idx, 1)
+			t.Fatalf("Server %d should be in term %d. Current state %d", idx, 1, state.Term)
 		}
 		if idx == leaderIdx {
 			// server should be the leader
