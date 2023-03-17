@@ -1,6 +1,7 @@
 package surfstore
 
 import (
+	"database/sql"
 	"errors"
 	"log"
 	"os"
@@ -304,6 +305,28 @@ func getHashlist(b []byte, blockSize int) []string {
 		hashList = append(hashList, hash)
 	}
 	return hashList
+}
+
+// create table <file>.db
+func CreateTable(outputMetaPath string) error {
+	// remove index.db file if it exists
+	// outputMetaPath := ConcatPath(baseDir, DEFAULT_META_FILENAME)
+	if _, err := os.Stat(outputMetaPath); err == nil {
+		e := os.Remove(outputMetaPath)
+		if e != nil {
+			log.Fatal("Error During Meta Write Back")
+		}
+	}
+	db, err := sql.Open("sqlite3", outputMetaPath)
+	if err != nil {
+		log.Fatal("Error During Meta Write Back")
+	}
+	statement, err := db.Prepare(createTable)
+	if err != nil {
+		log.Fatal("Error During Meta Write Back")
+	}
+	statement.Exec()
+	return nil
 }
 
 // func getBlocks(b []byte, blockSize int) [][]byte {
