@@ -80,7 +80,7 @@ func WriteMetaFile(fileMetas map[string]*FileMetaData, baseDir string) error {
 }
 
 // create table <file>.db
-func CreateTable2(outputMetaPath string) error {
+func CreateTable(outputMetaPath string) error {
 	// remove index.db file if it exists
 	// outputMetaPath := ConcatPath(baseDir, DEFAULT_META_FILENAME)
 	if _, err := os.Stat(outputMetaPath); err == nil {

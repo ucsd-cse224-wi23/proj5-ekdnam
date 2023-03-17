@@ -14,6 +14,7 @@ func main() {
 	flag.Parse()
 
 	config := surfstore.LoadRaftConfigFile(*configFile)
+	log.Println(config)
 
 	// Disable log outputs if debug flag is missing
 	if !(*debug) {

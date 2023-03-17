@@ -84,10 +84,8 @@ func NewRaftServer(id int64, config RaftConfig) (*RaftSurfstore, error) {
 
 // TODO Start up the Raft server and any services here
 func ServeRaftServer(server *RaftSurfstore) error {
-	// panic("todo")
 	grpcServer := grpc.NewServer()
 	RegisterRaftSurfstoreServer(grpcServer, server)
-
 	lis, err := net.Listen("tcp", server.ip)
 	if err != nil {
 		return fmt.Errorf("failed to listen: %v", err)
