@@ -68,13 +68,13 @@ func NewRaftServer(id int64, config RaftConfig) (*RaftSurfstore, error) {
 func ServeRaftServer(server *RaftSurfstore) error {
 	grpcServer := grpc.NewServer()
 	RegisterRaftSurfstoreServer(grpcServer, server)
-	addr := server.peers[server.id]
-	l, err := net.Listen("tcp", addr)
+
+	l, err := net.Listen("tcp", server.peers[server.id])
 	if err != nil {
-		return fmt.Errorf("failed to listen %v", err)
+		return fmt.Errorf("cannot listen: %v", err)
 	}
 	if err := grpcServer.Serve(l); err != nil {
-		return fmt.Errorf("failed to serve %v", err)
+		return fmt.Errorf("cannot serve: %v", err)
 	}
 	return nil
 }

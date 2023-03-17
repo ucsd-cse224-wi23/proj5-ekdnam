@@ -50,11 +50,15 @@ func (s *RaftSurfstore) checkLeader() bool {
 }
 
 func (s *RaftSurfstore) GetFileInfoMap(ctx context.Context, empty *emptypb.Empty) (*FileInfoMap, error) {
-	crashed := s.checkCrashed()
+	s.isCrashedMutex.RLock()
+	crashed := s.isCrashed
+	s.isCrashedMutex.RUnlock()
 	if crashed {
 		return nil, ERR_SERVER_CRASHED
 	}
-	leader := s.checkLeader()
+	s.isLeaderMutex.RLock()
+	leader := s.isLeader
+	s.isLeaderMutex.RUnlock()
 	if !leader {
 		return nil, ERR_NOT_LEADER
 	}
@@ -69,11 +73,15 @@ func (s *RaftSurfstore) GetFileInfoMap(ctx context.Context, empty *emptypb.Empty
 }
 
 func (s *RaftSurfstore) GetBlockStoreMap(ctx context.Context, hashes *BlockHashes) (*BlockStoreMap, error) {
-	crashed := s.checkCrashed()
+	s.isCrashedMutex.RLock()
+	crashed := s.isCrashed
+	s.isCrashedMutex.RUnlock()
 	if crashed {
 		return nil, ERR_SERVER_CRASHED
 	}
-	leader := s.checkLeader()
+	s.isLeaderMutex.RLock()
+	leader := s.isLeader
+	s.isLeaderMutex.RUnlock()
 	if !leader {
 		return nil, ERR_NOT_LEADER
 	}
@@ -89,11 +97,15 @@ func (s *RaftSurfstore) GetBlockStoreMap(ctx context.Context, hashes *BlockHashe
 }
 
 func (s *RaftSurfstore) GetBlockStoreAddrs(ctx context.Context, empty *emptypb.Empty) (*BlockStoreAddrs, error) {
-	crashed := s.checkCrashed()
+	s.isCrashedMutex.RLock()
+	crashed := s.isCrashed
+	s.isCrashedMutex.RUnlock()
 	if crashed {
 		return nil, ERR_SERVER_CRASHED
 	}
-	leader := s.checkLeader()
+	s.isLeaderMutex.RLock()
+	leader := s.isLeader
+	s.isLeaderMutex.RUnlock()
 	if !leader {
 		return nil, ERR_NOT_LEADER
 	}
@@ -108,11 +120,15 @@ func (s *RaftSurfstore) GetBlockStoreAddrs(ctx context.Context, empty *emptypb.E
 }
 
 func (s *RaftSurfstore) UpdateFile(ctx context.Context, filemeta *FileMetaData) (*Version, error) {
-	crashed := s.checkCrashed()
+	s.isCrashedMutex.RLock()
+	crashed := s.isCrashed
+	s.isCrashedMutex.RUnlock()
 	if crashed {
 		return nil, ERR_SERVER_CRASHED
 	}
-	leader := s.checkLeader()
+	s.isLeaderMutex.RLock()
+	leader := s.isLeader
+	s.isLeaderMutex.RUnlock()
 	if !leader {
 		return nil, ERR_NOT_LEADER
 	}
@@ -150,7 +166,9 @@ func (s *RaftSurfstore) sendToAllFollowersInParallel() {
 	totalAppends := 1
 	for {
 		result := <-responses
-		crashed := s.checkCrashed()
+		s.isCrashedMutex.RLock()
+		crashed := s.isCrashed
+		s.isCrashedMutex.RUnlock()
 		if crashed {
 			*s.pendingCommits[pendingIdx] <- false
 			break
@@ -171,7 +189,9 @@ func (s *RaftSurfstore) sendToAllFollowersInParallel() {
 
 func (s *RaftSurfstore) sendToFollower(addr string, entryIdx int64, commitChannel chan bool) {
 	for {
-		crashed := s.checkCrashed()
+		s.isCrashedMutex.RLock()
+		crashed := s.isCrashed
+		s.isCrashedMutex.RUnlock()
 		if crashed {
 			commitChannel <- false
 		}
@@ -220,9 +240,11 @@ func (s *RaftSurfstore) sendToFollower(addr string, entryIdx int64, commitChanne
 // of last new entry)
 func (s *RaftSurfstore) AppendEntries(ctx context.Context, input *AppendEntryInput) (*AppendEntryOutput, error) {
 
-	crashed := s.checkCrashed()
+	s.isCrashedMutex.RLock()
+	crashed := s.isCrashed
+	s.isCrashedMutex.RUnlock()
 	if crashed {
-		return &AppendEntryOutput{Success: false, MatchedIndex: -1}, ERR_SERVER_CRASHED
+		return &AppendEntryOutput{Success: false}, ERR_SERVER_CRASHED
 	}
 	// leader := s.checkLeader()
 	// if !leader {
@@ -231,7 +253,7 @@ func (s *RaftSurfstore) AppendEntries(ctx context.Context, input *AppendEntryInp
 
 	term := input.Term
 	if term < s.term {
-		return &AppendEntryOutput{Success: false, MatchedIndex: -1}, nil
+		return &AppendEntryOutput{Success: false}, nil
 	}
 	if term > s.term {
 		s.isLeaderMutex.RLock()
@@ -269,14 +291,14 @@ func (s *RaftSurfstore) AppendEntries(ctx context.Context, input *AppendEntryInp
 		}
 	}
 
-	return &AppendEntryOutput{Success: true, MatchedIndex: -1}, nil
+	return &AppendEntryOutput{Success: true}, nil
 }
 
 func (s *RaftSurfstore) SetLeader(ctx context.Context, _ *emptypb.Empty) (*Success, error) {
 	s.isCrashedMutex.RLock()
 	crashed := s.isCrashed
 	s.isCrashedMutex.RUnlock()
-	if !crashed {
+	if crashed {
 		return &Success{Flag: false}, ERR_SERVER_CRASHED
 	}
 	log.Println("Previous term - ", s.term)
@@ -284,17 +306,21 @@ func (s *RaftSurfstore) SetLeader(ctx context.Context, _ *emptypb.Empty) (*Succe
 	log.Println("New term - ", s.term)
 	s.isLeaderMutex.RLock()
 	s.isLeader = true
-	s.isCrashedMutex.RUnlock()
+	s.isLeaderMutex.RUnlock()
 
 	return &Success{Flag: true}, nil
 }
 
 func (s *RaftSurfstore) SendHeartbeat(ctx context.Context, _ *emptypb.Empty) (*Success, error) {
-	crashed := s.checkCrashed()
+	s.isCrashedMutex.RLock()
+	crashed := s.isCrashed
+	s.isCrashedMutex.RUnlock()
 	if crashed {
 		return &Success{Flag: false}, ERR_SERVER_CRASHED
 	}
-	leader := s.checkLeader()
+	s.isLeaderMutex.RLock()
+	leader := s.isLeader
+	s.isLeaderMutex.RUnlock()
 	if !leader {
 		return &Success{Flag: false}, ERR_NOT_LEADER
 	}
