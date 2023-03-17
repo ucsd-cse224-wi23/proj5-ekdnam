@@ -29,31 +29,13 @@ func LoadRaftConfigFile(filename string) (cfg RaftConfig) {
 	decoder := json.NewDecoder(configReader)
 
 	if err := decoder.Decode(&cfg); err == io.EOF {
+		log.Println("EOF while reading file. returning: ", err)
 		return
 	} else if err != nil {
 		log.Fatal(err)
 	}
 	return
 }
-
-// func NewRaftServer(id int64, config RaftConfig) (*RaftSurfstore, error) {
-// 	// TODO Any initialization you need here
-
-// 	isLeaderMutex := sync.RWMutex{}
-// 	isCrashedMutex := sync.RWMutex{}
-
-// 	server := RaftSurfstore{
-// 		isLeader:       false,
-// 		isLeaderMutex:  &isLeaderMutex,
-// 		term:           0,
-// 		metaStore:      NewMetaStore(config.BlockAddrs),
-// 		log:            make([]*UpdateOperation, 0),
-// 		isCrashed:      false,
-// 		isCrashedMutex: &isCrashedMutex,
-// 	}
-
-// 	return &server, nil
-// }
 
 func NewRaftServer(id int64, config RaftConfig) (*RaftSurfstore, error) {
 	// TODO Any initialization you need here
@@ -63,15 +45,15 @@ func NewRaftServer(id int64, config RaftConfig) (*RaftSurfstore, error) {
 	isCrashedMutex := sync.RWMutex{}
 
 	server := RaftSurfstore{
-		ip:       config.RaftAddrs[id],
-		ipList:   config.RaftAddrs,
-		serverId: id,
+		// myAddr:    config.RaftAddrs[id],
+		peers: config.RaftAddrs,
+		id:    id,
 
 		commitIndex: -1,
 		lastApplied: -1,
 
 		isLeader:       false,
-		isLeaderMutex:  isLeaderMutex,
+		isLeaderMutex:  &isLeaderMutex,
 		term:           0,
 		metaStore:      NewMetaStore(config.BlockAddrs),
 		log:            make([]*UpdateOperation, 0),
@@ -86,12 +68,13 @@ func NewRaftServer(id int64, config RaftConfig) (*RaftSurfstore, error) {
 func ServeRaftServer(server *RaftSurfstore) error {
 	grpcServer := grpc.NewServer()
 	RegisterRaftSurfstoreServer(grpcServer, server)
-	lis, err := net.Listen("tcp", server.ip)
+	addr := server.peers[server.id]
+	l, err := net.Listen("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("failed to listen: %v", err)
+		return fmt.Errorf("failed to listen %v", err)
 	}
-	if err := grpcServer.Serve(lis); err != nil {
-		return fmt.Errorf("failed to serve: %v", err)
+	if err := grpcServer.Serve(l); err != nil {
+		return fmt.Errorf("failed to serve %v", err)
 	}
 	return nil
 }
