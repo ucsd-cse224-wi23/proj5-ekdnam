@@ -3,7 +3,6 @@ package surfstore
 import (
 	context "context"
 	"fmt"
-	"log"
 
 	//"log"
 	"math"
@@ -30,6 +29,7 @@ type RaftSurfstore struct {
 	// myAddr    string
 	peers []string
 	id    int64
+	ip    string
 
 	metaStore *MetaStore
 
@@ -63,6 +63,28 @@ func (s *RaftSurfstore) GetFileInfoMap(ctx context.Context, empty *emptypb.Empty
 	return s.metaStore.GetFileInfoMap(ctx, empty)
 }
 
+func (s *RaftSurfstore) GetBlockStoreMap(ctx context.Context, hashes *BlockHashes) (*BlockStoreMap, error) {
+	s.isCrashedMutex.RLock()
+	isCrashed := s.isCrashed
+	s.isCrashedMutex.RUnlock()
+	if isCrashed {
+		return nil, ERR_SERVER_CRASHED
+	}
+	s.isLeaderMutex.RLock()
+	isLeader := s.isLeader
+	s.isLeaderMutex.RUnlock()
+	if !isLeader {
+		return nil, ERR_NOT_LEADER
+	}
+	for {
+		majorityAlive, _ := s.SendHeartbeat(ctx, &emptypb.Empty{})
+		if majorityAlive.Flag {
+			break
+		}
+	}
+	return s.metaStore.GetBlockStoreMap(ctx, hashes)
+}
+
 func (s *RaftSurfstore) GetBlockStoreAddrs(ctx context.Context, empty *emptypb.Empty) (*BlockStoreAddrs, error) {
 	s.isCrashedMutex.RLock()
 	isCrashed := s.isCrashed
@@ -87,6 +109,10 @@ func (s *RaftSurfstore) GetBlockStoreAddrs(ctx context.Context, empty *emptypb.E
 }
 
 func (s *RaftSurfstore) UpdateFile(ctx context.Context, filemeta *FileMetaData) (*Version, error) {
+	op := UpdateOperation{
+		Term:         s.term,
+		FileMetaData: filemeta,
+	}
 	s.isCrashedMutex.RLock()
 	isCrashed := s.isCrashed
 	s.isCrashedMutex.RUnlock()
@@ -99,18 +125,13 @@ func (s *RaftSurfstore) UpdateFile(ctx context.Context, filemeta *FileMetaData) 
 	if !isLeader {
 		return nil, ERR_NOT_LEADER
 	}
-	// return nil, nil
-	s.log = append(s.log, &UpdateOperation{
-		Term:         s.term,
-		FileMetaData: filemeta,
-	})
+	s.log = append(s.log, &op)
 	committed := make(chan bool)
 	s.pendingCommits = append(s.pendingCommits, &committed)
 
 	go s.sendToAllFollowersInParallel()
 
 	success := <-committed
-	// check if entry sent to all followers
 	if success {
 		s.lastApplied = s.commitIndex
 		return s.metaStore.UpdateFile(ctx, filemeta)
@@ -121,7 +142,6 @@ func (s *RaftSurfstore) UpdateFile(ctx context.Context, filemeta *FileMetaData) 
 func (s *RaftSurfstore) sendToAllFollowersInParallel() {
 	targetIdx := s.commitIndex + 1
 	pendingIdx := int64(len(s.pendingCommits) - 1)
-	//targetIdx := int64(len(s.log) - 1)
 	commitChan := make(chan bool, len(s.peers))
 	for idx, addr := range s.peers {
 		if int64(idx) == s.id {
@@ -130,10 +150,9 @@ func (s *RaftSurfstore) sendToAllFollowersInParallel() {
 		go s.sendToFollower(addr, targetIdx, commitChan)
 	}
 
-	totalResponses := 1
-	totalAppends := 1
+	commitCount := 1
 	for {
-		result := <-commitChan
+		commit := <-commitChan
 		s.isCrashedMutex.RLock()
 		isCrashed := s.isCrashed
 		s.isCrashedMutex.RUnlock()
@@ -141,19 +160,16 @@ func (s *RaftSurfstore) sendToAllFollowersInParallel() {
 			*s.pendingCommits[pendingIdx] <- false
 			break
 		}
-		totalResponses++
-		if result {
-			totalAppends++
+		if commit {
+			commitCount++
 		}
-		if totalAppends > len(s.peers)/2 {
+		if commitCount > len(s.peers)/2 {
 			s.commitIndex = targetIdx
 			*s.pendingCommits[pendingIdx] <- true
 			break
 		}
-		if totalResponses == len(s.peers) {
-			break
-		}
 	}
+
 }
 
 func (s *RaftSurfstore) sendToFollower(addr string, entryIdx int64, commitChan chan bool) {
@@ -164,16 +180,12 @@ func (s *RaftSurfstore) sendToFollower(addr string, entryIdx int64, commitChan c
 		if isCrashed {
 			commitChan <- false
 		}
-
 		conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
-			log.Printf("addr %s entryIdx %d error in sendToFollower\n", addr, entryIdx)
-			log.Println(err)
 			return
 		}
 		client := NewRaftSurfstoreClient(conn)
 
-		// TODO create correct AppendEntryInput from s.nextIndex, etc
 		var prevLogTerm int64
 		if entryIdx == 0 {
 			prevLogTerm = 0
@@ -210,16 +222,14 @@ func (s *RaftSurfstore) sendToFollower(addr string, entryIdx int64, commitChan c
 // 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index
 // of last new entry)
 func (s *RaftSurfstore) AppendEntries(ctx context.Context, input *AppendEntryInput) (*AppendEntryOutput, error) {
-	output := &AppendEntryOutput{
-		Success:      false,
-		MatchedIndex: -1,
-	}
-
 	s.isCrashedMutex.RLock()
 	isCrashed := s.isCrashed
 	s.isCrashedMutex.RUnlock()
 	if isCrashed {
-		return output, ERR_SERVER_CRASHED
+		return &AppendEntryOutput{
+			Success:      false,
+			MatchedIndex: -1,
+		}, ERR_SERVER_CRASHED
 	}
 
 	if input.Term > s.term {
@@ -229,10 +239,12 @@ func (s *RaftSurfstore) AppendEntries(ctx context.Context, input *AppendEntryInp
 		s.isLeaderMutex.Unlock()
 	}
 
-	if input.Term < s.term { //TODO wrong??
-		return output, nil
+	if input.Term < s.term {
+		return &AppendEntryOutput{
+			Success:      false,
+			MatchedIndex: -1,
+		}, nil
 	}
-
 	for index, logEntry := range s.log {
 		s.lastApplied = int64(index - 1)
 		if len(input.Entries) < index+1 {
@@ -249,6 +261,7 @@ func (s *RaftSurfstore) AppendEntries(ctx context.Context, input *AppendEntryInp
 			input.Entries = input.Entries[index+1:]
 		}
 	}
+
 	s.log = append(s.log, input.Entries...)
 
 	if input.LeaderCommit > s.commitIndex {
@@ -260,11 +273,15 @@ func (s *RaftSurfstore) AppendEntries(ctx context.Context, input *AppendEntryInp
 			s.metaStore.UpdateFile(ctx, entry.FileMetaData)
 		}
 	}
-	output.Success = true
-	return output, nil
+	return &AppendEntryOutput{
+		Success:      true,
+		MatchedIndex: -1,
+	}, nil
+
 }
 
 // This should set the leader status and any related variables as if the node has just won an election
+
 func (s *RaftSurfstore) SetLeader(ctx context.Context, _ *emptypb.Empty) (*Success, error) {
 	s.isCrashedMutex.RLock()
 	isCrashed := s.isCrashed
@@ -272,8 +289,7 @@ func (s *RaftSurfstore) SetLeader(ctx context.Context, _ *emptypb.Empty) (*Succe
 	if isCrashed {
 		return &Success{Flag: false}, ERR_SERVER_CRASHED
 	}
-
-	s.term++
+	s.term = s.term + 1
 	s.isLeaderMutex.Lock()
 	s.isLeader = true
 	s.isLeaderMutex.Unlock()

@@ -29,7 +29,6 @@ func LoadRaftConfigFile(filename string) (cfg RaftConfig) {
 	decoder := json.NewDecoder(configReader)
 
 	if err := decoder.Decode(&cfg); err == io.EOF {
-		log.Println("EOF while reading file. returning: ", err)
 		return
 	} else if err != nil {
 		log.Fatal(err)
@@ -45,7 +44,7 @@ func NewRaftServer(id int64, config RaftConfig) (*RaftSurfstore, error) {
 	isCrashedMutex := sync.RWMutex{}
 
 	server := RaftSurfstore{
-		// myAddr:    config.RaftAddrs[id],
+		ip:    config.RaftAddrs[id],
 		peers: config.RaftAddrs,
 		id:    id,
 
@@ -68,8 +67,7 @@ func NewRaftServer(id int64, config RaftConfig) (*RaftSurfstore, error) {
 func ServeRaftServer(server *RaftSurfstore) error {
 	grpcServer := grpc.NewServer()
 	RegisterRaftSurfstoreServer(grpcServer, server)
-
-	l, err := net.Listen("tcp", server.peers[server.id])
+	l, err := net.Listen("tcp", server.ip)
 	if err != nil {
 		return fmt.Errorf("cannot listen: %v", err)
 	}
