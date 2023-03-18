@@ -3,7 +3,6 @@ package surfstore
 import (
 	context "context"
 	"fmt"
-	"log"
 
 	//"log"
 	"math"
@@ -143,17 +142,17 @@ func (server *RaftSurfstore) UpdateFile(ctx context.Context, filemeta *FileMetaD
 func (server *RaftSurfstore) sendToAllFollowersInParallel() {
 	targetIdx := server.commitIndex + 1
 	pendingIdx := int64(len(server.pendingCommits) - 1)
-	responses := make(chan bool, len(server.peers))
+	commitChan := make(chan bool, len(server.peers))
 	for idx, addr := range server.peers {
 		if int64(idx) == server.id {
 			continue
 		}
-		go server.sendToFollower(addr, targetIdx, responses)
+		go server.sendToFollower(addr, targetIdx, commitChan)
 	}
 
-	totalAppends := 1
+	commitCount := 1
 	for {
-		response := <-responses
+		commit := <-commitChan
 		server.isCrashedMutex.RLock()
 		isCrashed := server.isCrashed
 		server.isCrashedMutex.RUnlock()
@@ -161,10 +160,10 @@ func (server *RaftSurfstore) sendToAllFollowersInParallel() {
 			*server.pendingCommits[pendingIdx] <- false
 			break
 		}
-		if response {
-			totalAppends++
+		if commit {
+			commitCount++
 		}
-		if totalAppends > len(server.peers)/2 {
+		if commitCount > len(server.peers)/2 {
 			server.commitIndex = targetIdx
 			*server.pendingCommits[pendingIdx] <- true
 			break
@@ -176,15 +175,13 @@ func (server *RaftSurfstore) sendToAllFollowersInParallel() {
 func (server *RaftSurfstore) sendToFollower(addr string, entryIdx int64, commitChan chan bool) {
 	for {
 		server.isCrashedMutex.RLock()
-		crashed := server.isCrashed
+		isCrashed := server.isCrashed
 		server.isCrashedMutex.RUnlock()
-		if crashed {
+		if isCrashed {
 			commitChan <- false
 		}
 		conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
-			log.Printf("addr %s entryIdx %d error in sendToFollower\n", addr, entryIdx)
-			log.Println(err)
 			return
 		}
 		client := NewRaftSurfstoreClient(conn)
@@ -216,13 +213,6 @@ func (server *RaftSurfstore) sendToFollower(addr string, entryIdx int64, commitC
 	}
 }
 
-func (server *RaftSurfstore) setToFollower(leader *AppendEntryInput) {
-	server.term = leader.Term
-	server.isLeaderMutex.Lock()
-	server.isLeader = false
-	server.isLeaderMutex.Unlock()
-}
-
 // 1. Reply false if term < currentTerm (§5.1)
 // 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term
 // matches prevLogTerm (§5.3)
@@ -235,42 +225,38 @@ func (server *RaftSurfstore) AppendEntries(ctx context.Context, appendEntryInput
 	server.isCrashedMutex.RLock()
 	isCrashed := server.isCrashed
 	server.isCrashedMutex.RUnlock()
-	// server crashed, cannot proceed. return appendentryoutput with success false
 	if isCrashed {
 		return &AppendEntryOutput{
 			Success:      false,
 			MatchedIndex: -1,
 		}, ERR_SERVER_CRASHED
 	}
-	// my term is less than input term. thus set to follower
+
 	if appendEntryInput.Term > server.term {
-		server.setToFollower(appendEntryInput)
+		server.term = appendEntryInput.Term
+		server.isLeaderMutex.Lock()
+		server.isLeader = false
+		server.isLeaderMutex.Unlock()
 	}
-	// if term is less than my term, return false
+
 	if appendEntryInput.Term < server.term {
 		return &AppendEntryOutput{
 			Success:      false,
 			MatchedIndex: -1,
 		}, nil
 	}
-	// iterate over all logs
 	for index, logEntry := range server.log {
 		server.lastApplied = int64(index - 1)
-		// appendEntryInput entries less than index
 		if len(appendEntryInput.Entries) < index+1 {
 			server.log = server.log[:index]
 			appendEntryInput.Entries = make([]*UpdateOperation, 0)
 			break
 		}
-		//  If an existing entry conflicts with a new one (same index
-		// but different terms), delete the existing entry and all that
-		// follow it (§5.3)
 		if logEntry != appendEntryInput.Entries[index] {
 			server.log = server.log[:index]
 			appendEntryInput.Entries = appendEntryInput.Entries[index:]
 			break
 		}
-		// consider entries only from index + 1
 		if len(server.log) == index+1 {
 			appendEntryInput.Entries = appendEntryInput.Entries[index+1:]
 		}
@@ -291,6 +277,7 @@ func (server *RaftSurfstore) AppendEntries(ctx context.Context, appendEntryInput
 		Success:      true,
 		MatchedIndex: -1,
 	}, nil
+
 }
 
 // This should set the leader status and any related variables as if the node has just won an election
@@ -339,14 +326,14 @@ func (server *RaftSurfstore) SendHeartbeat(ctx context.Context, _ *emptypb.Empty
 		}
 		client := NewRaftSurfstoreClient(conn)
 
-		// TODO create correct AppendEntryInput from server.nextIndex, etc
+		// TODO create correct AppendEntryappendEntryInput from server.nextIndex, etc
 		var prevLogTerm int64
 		if server.commitIndex == -1 {
 			prevLogTerm = 0
 		} else {
 			prevLogTerm = server.log[server.commitIndex].Term
 		}
-		input := &AppendEntryInput{
+		appendEntryInput := &AppendEntryInput{
 			Term:         server.term,
 			PrevLogTerm:  prevLogTerm,
 			PrevLogIndex: server.commitIndex,
@@ -356,7 +343,7 @@ func (server *RaftSurfstore) SendHeartbeat(ctx context.Context, _ *emptypb.Empty
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		output, _ := client.AppendEntries(ctx, input)
+		output, _ := client.AppendEntries(ctx, appendEntryInput)
 		if output != nil {
 			up++
 			if up > len(server.peers)/2 {
